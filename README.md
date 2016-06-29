@@ -1,12 +1,16 @@
 # gd32tools
 
-- upload firmwares to gd32f1xx chips.
+- upload firmwares to gd32f150 chips through serial port.
 - compatible with stm32.
 - accept hex and bin format.
 
 ----------------------------
 
-upload address is 0x08000000, the address in hex file is ignored.
+### Note
+
+- upload address is 0x08000000, the address in hex file is ignored.
+- connect to gd32f150 uart1(pa9, pa10), boot0 should keep high.
+- if your application can not work after load complete, try to add `NVIC_VectTableSet(NVIC_VECTTAB_FLASH, 0)` at start of main().
 
 ----------------------------
 
