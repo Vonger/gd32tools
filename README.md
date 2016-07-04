@@ -31,10 +31,10 @@ the libserialport.a will be in its ./.libs/ folder.
 
 ### Usage of gd32up
 
--list: list current valid serial ports.
--read|write [port] [file bin]: read/write bin file from/to flash.
--hex2bin [in hex] [out: bin]: convert hex to bin file.
--bin2hex [in bin] [out: hex]: convert bin to hex file.
--write [port]: erase flash only.
+- list: list current valid serial ports.
+- read|write [port] [file bin]: read/write bin file from/to flash.
+- hex2bin [in hex] [out: bin]: convert hex to bin file.
+- bin2hex [in bin] [out: hex]: convert bin to hex file.
+- write [port]: erase flash only.
 
 
