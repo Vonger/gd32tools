@@ -26,6 +26,8 @@ the libserialport.a will be in its ./.libs/ folder.
 
 ### Compile serial debug for MacOS
 
+- move libserialport to gd32up folder.
+
 - gcc -g gd32up.c ./libserialport/.lib/libserialport.a -o gd32up -I./libserialport -framework IOKit -framework CoreFoundation
 
 
