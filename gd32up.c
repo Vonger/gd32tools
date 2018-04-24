@@ -10,27 +10,38 @@
 #include "libserialport.h"
 
 #define MAXWAIT     600
+static int debug, slow;
 
 void print_hex(const char *name, const char *buf, size_t count)
 {
     int i;
     printf("%s %zu: ", name, count);
     for (i = 0; i < count; i++)
-        printf("%02X ", ((unsigned char *)buf)[i]);
+        printf("%02X ", (unsigned char)buf[i]);
     printf("\n");
 }
 
 int sp_write(struct sp_port *port, const void *buf, size_t count)
 {
-    int wbyte = sp_blocking_write(port, buf, count, MAXWAIT);
-    //print_hex("wr", buf, count);
+    int wbyte = 0;
+    if (slow) {
+        while (wbyte != count) {
+            sp_blocking_write(port, buf + wbyte++, 1, MAXWAIT);
+            usleep(1000);
+        }
+    } else {
+        wbyte = sp_blocking_write(port, buf, count, MAXWAIT);
+    }
+    if (debug)
+        print_hex("wr", buf, count);
     return wbyte;
 }
 
 int sp_read(struct sp_port *port, void *buf, size_t count)
 {
     int rbyte = sp_blocking_read(port, buf, count, MAXWAIT);
-    //print_hex("rd", buf, count);
+    if (debug)
+        print_hex("rd", buf, count);
     return rbyte;
 }
 
@@ -211,7 +222,7 @@ const char * gd32_get_unique_id(struct sp_port *port)
         return NULL;
 
     for (i = 0; i < 12; i++)
-        p += sprintf(p, "%02X", buf[i]);
+        p += sprintf(p, "%02X", (unsigned char)buf[i]);
 
     return id;
 }
@@ -269,11 +280,41 @@ void gd32_read_flash_to_file(const char *name, const char *path)
         }
     }
     fclose(fp);
+    printf("\n");       // end of transfer process line.
 
 read_end:
-    printf("\nelapsed time %lds, thank you.\n", time(NULL) - ct);
+    printf("elapsed time %lds, thank you.\n", time(NULL) - ct);
 
     gd32_uninit_serial(port);
+}
+
+void gd32_run_flash(struct sp_port *port)
+{
+    char buf[5];
+
+    // jump command is 0x21.
+    buf[0] = 0x21;
+    buf[1] = ~buf[0];
+    sp_write(port, buf, 2);
+    if (1 == sp_read(port, buf, 1) && buf[0] != 0x79)
+        return;
+
+    // flash default address is 0x08000000
+    buf[0] = 0x08;
+    buf[1] = 0x00;
+    buf[2] = 0x00;
+    buf[3] = 0x00;
+    buf[4] = block_xor(buf, 4);
+    sp_write(port, buf, 5);
+    if (1 == sp_read(port, buf, 1) && buf[0] != 0x79)
+        return;
+
+    // the bootloader will return another 0x79.
+    if (1 == sp_read(port, buf, 1) && buf[0] != 0x79)
+        return;
+
+    // every thing is OK now.
+    printf("run firmware from 0x08000000 now!\n");
 }
 
 void gd32_write_file_to_flash(const char *name, const char *path)
@@ -340,38 +381,14 @@ void gd32_write_file_to_flash(const char *name, const char *path)
         }
     }
     fclose(fp);
+    printf("\n");       // end of transfer process line.
+
+    gd32_run_flash(port);
 
 write_end:
-    printf("\nelapsed time %lds, thank you.\n", time(NULL) - ct);
+    printf("elapsed time %lds, thank you.\n", time(NULL) - ct);
 
     gd32_uninit_serial(port);
-}
-
-void gd32_run_flash()
-{
-    // jump command is 0x21.
-    buf[0] = 0x21;
-    buf[1] = ~buf[0];
-    sp_write(port, buf, 2);
-    if (1 == sp_read(port, buf, 1) && buf[0] != 0x79)
-        return;
-
-    // flash default address is 0x08000000
-    buf[0] = 0x08;
-    buf[1] = 0x00;
-    buf[2] = 0x00;
-    buf[3] = 0x00;
-    buf[4] = block_xor(buf, 4);
-    sp_write(port, buf, 5);
-    if (1 == sp_read(port, buf, 1) && buf[0] != 0x79)
-        return;
-
-    // the bootloader will return another 0x79.
-    if (1 == sp_read(port, buf, 1) && buf[0] != 0x79)
-        return;
-
-    // every thing is OK now.
-    printf("chip has been reset!\n");
 }
 
 int block_hex(const char *s, int size)
@@ -457,6 +474,15 @@ int convert_bin_to_hex(const char *bin, const char *hex)
     return total;
 }
 
+int check_tag(const char *tag)
+{
+    FILE *fp = fopen(tag, "rb");
+    if (fp == NULL)
+        return 0;
+    fclose(fp);
+    return 1;
+}
+
 int main(int argc, char *argv[])
 {
     if (argc == 1) {
@@ -466,6 +492,15 @@ int main(int argc, char *argv[])
         printf("usage: gd32up bin2hex [in bin] [out: hex]\n\tconvert bin to hex file.\n\n");
         return -1;
     }
+
+    debug = check_tag("debug");
+    if (debug)
+        printf("TAG: debug mode is enabled.\n");
+
+    // slow mode: we find some time gd32 can not accept two bytes, but if we slow down, it will work.
+    slow = check_tag("slow");
+    if (slow)
+        printf("TAG: slow write mode is enabled.\n");
 
     if (!strcmp(argv[1], "list")) {
         print_serial_list();
@@ -488,7 +523,6 @@ int main(int argc, char *argv[])
         }
 
         gd32_write_file_to_flash(argv[2], path);
-        gd32_run_flash();
 
         free(path);
         return 1;
