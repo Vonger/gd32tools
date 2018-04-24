@@ -242,7 +242,7 @@ void gd32_read_flash_to_file(const char *name, const char *path)
         return;     // invalid port.
     }
     if (gd32_init_bootloader(port) < 0) {
-        printf("can not init serial %s.\n", name);
+        printf("can not init mcu %s.\n", name);
         return;     // invalid protocol.
     }
 
@@ -253,6 +253,10 @@ void gd32_read_flash_to_file(const char *name, const char *path)
         return;
     }
     printf("connected to chip, id is %s.\n", id);
+
+    // path is null, just read id but not read anything to file.
+    if (path == NULL)
+        return;
 
     // everything is ok, read data out, 64KB default.
     fp = fopen(path, "wb");
@@ -508,7 +512,10 @@ int main(int argc, char *argv[])
     }
 
     if (!strcmp(argv[1], "read")) {
-        gd32_read_flash_to_file(argv[2], argv[3]);
+        if (argc == 4)
+            gd32_read_flash_to_file(argv[2], argv[3]);
+        else
+            gd32_read_flash_to_file(argv[2], NULL); 
         return 1;
     }
 
