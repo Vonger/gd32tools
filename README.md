@@ -6,6 +6,10 @@
 
 ----------------------------
 
+### Firmware Toolchain
+
+We use default ARM-M3 toolchain to compile, download at https://developer.arm.com/tools-and-software/open-source-software/developer-tools/gnu-toolchain/gnu-rm/downloads
+
 ### Note
 
 - upload address is 0x08000000, the address in hex file is ignored.
