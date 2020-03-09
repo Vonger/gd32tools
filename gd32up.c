@@ -9,8 +9,8 @@
 
 #include "libserialport.h"
 
-#define MAXWAIT     600
-static int debug, slow;
+#define MAX_WAIT     600
+#define BLK_SIZE     0x100
 
 void print_hex(const char *name, const char *buf, size_t count)
 {
@@ -23,25 +23,19 @@ void print_hex(const char *name, const char *buf, size_t count)
 
 int sp_write(struct sp_port *port, const void *buf, size_t count)
 {
-    int wbyte = 0;
-    if (slow) {
-        while (wbyte != count) {
-            sp_blocking_write(port, buf + wbyte++, 1, MAXWAIT);
-            usleep(1000);
-        }
-    } else {
-        wbyte = sp_blocking_write(port, buf, count, MAXWAIT);
-    }
-    if (debug)
-        print_hex("wr", buf, count);
+    int wbyte;
+    wbyte = sp_blocking_write(port, buf, count, MAX_WAIT);
+    
+//    print_hex("wr", buf, wbyte);
     return wbyte;
 }
 
 int sp_read(struct sp_port *port, void *buf, size_t count)
 {
-    int rbyte = sp_blocking_read(port, buf, count, MAXWAIT);
-    if (debug)
-        print_hex("rd", buf, count);
+    int rbyte;
+    rbyte = sp_blocking_read(port, buf, count, MAX_WAIT);
+    
+//    print_hex("rd", buf, rbyte);
     return rbyte;
 }
 
@@ -60,6 +54,7 @@ void print_serial_list()
 struct sp_port * gd32_init_serial(const char *name)
 {
     struct sp_port *port;
+    int baudrate = 115200;
 
     if (SP_OK != sp_get_port_by_name(name, &port))
         return NULL;
@@ -71,10 +66,14 @@ struct sp_port * gd32_init_serial(const char *name)
     sp_flush(port, SP_BUF_BOTH);
 
     // gd32f150 supported protocol 115200, 8e1.
-    sp_set_baudrate(port, 115200);
+    printf("set bandrate to %d.\n", baudrate);
+    sp_set_baudrate(port, baudrate);
     sp_set_bits(port, 8);
     sp_set_parity(port, SP_PARITY_EVEN);
     sp_set_stopbits(port, 1);
+    
+    // necessary, or system will drop 0x11 and 0x13.
+    sp_set_flowcontrol(port, SP_FLOWCONTROL_NONE);
 
     return port;
 }
@@ -128,21 +127,25 @@ int gd32_erase_flash(struct sp_port *port)
     sp_write(port, buf, 2);
     if (1 == sp_read(port, buf, 1) && buf[0] != 0x79)
         return -__LINE__;
-
+    
+    printf("erase flash...");
+   
     // requests to erase all blocks.
     buf[0] = 0xff;
     buf[1] = ~buf[0];
     sp_write(port, buf, 2);
-    // this ACK(0x79) is a long wait, takes around 200ms.
+    // erase takes around 200ms, MAX_WAIT must big enough.
     if (1 == sp_read(port, buf, 1) && buf[0] != 0x79)
         return -__LINE__;
 
+    printf("done\n");
     return 1;
 }
 
 int gd32_read_memory(struct sp_port *port, int addr, char *d, int size)
 {
     char buf[5];
+    int used;
 
     // read memory command is 0x11.
     buf[0] = 0x11;
@@ -169,15 +172,16 @@ int gd32_read_memory(struct sp_port *port, int addr, char *d, int size)
         return -__LINE__;
 
     // read real data from serial port.
-    if (size != sp_read(port, d, size))
-        return -__LINE__;
+    used = sp_read(port, d, size);
+    if (size != used)
+        return -used;
 
     return size;
 }
 
 int gd32_write_memory(struct sp_port *port, int addr, char *d, int size)
 {
-    char buf[0x102], cmp[0x100];
+    char buf[BLK_SIZE + 2];
 
     // write memory command is 0x31.
     buf[0] = 0x31;
@@ -204,25 +208,21 @@ int gd32_write_memory(struct sp_port *port, int addr, char *d, int size)
     if (1 == sp_read(port, buf, 1) && buf[0] != 0x79)
         return -__LINE__;
 
-    // read data from serial, compare the data.
-    if (size != gd32_read_memory(port, addr, cmp, size))
-        return -__LINE__;
-    if (memcmp(d, cmp, size))
-        return -__LINE__;
-
+    // we already have xor check, no need more compare.
     return size;
 }
 
-const char * gd32_get_unique_id(struct sp_port *port)
+const char *gd32_get_unique_id(struct sp_port *port)
 {
     static char id[25] = "";
-    char buf[12] = {0}, i, *p = id;
+    unsigned char buf[12] = {0};
+    char *p = id, i;
 
     if (gd32_read_memory(port, 0x1ffff7ac, buf, 12) < 0)
         return NULL;
 
     for (i = 0; i < 12; i++)
-        p += sprintf(p, "%02X", (unsigned char)buf[i]);
+        p += sprintf(p, "%02X", buf[i]);
 
     return id;
 }
@@ -242,7 +242,7 @@ void gd32_read_flash_to_file(const char *name, const char *path)
         return;     // invalid port.
     }
     if (gd32_init_bootloader(port) < 0) {
-        printf("can not init mcu %s.\n", name);
+        printf("can not init bootloader.\n", name);
         return;     // invalid protocol.
     }
 
@@ -264,21 +264,23 @@ void gd32_read_flash_to_file(const char *name, const char *path)
         printf("can not save to file %s.\n", path);
         goto read_end;
     }
-    printf("[I] => BIN: ");
-    for (i = 0; i < 256; i++) {       // 64KB totally there are 256 blocks.
-        char buf[0x100] = {0};
-        int size;
-        size = gd32_read_memory(port, 0x08000000 + i * 0x100, buf, 0x100);
-        if (size != 0x100) {
-            printf("error: can not read memory block %d.\n", i);
+    printf("[GD32] => %s: ", path);
+    for (i = 0; i < 65536 / BLK_SIZE; i++) {       // 64KB totally
+        char buf[BLK_SIZE] = {0};
+        int size, used;
+
+        size = gd32_read_memory(port, 0x08000000 + i * BLK_SIZE, buf, BLK_SIZE);
+        if (size != BLK_SIZE) {
+            printf("error: read size %d!=%d at block %d.\n", size, BLK_SIZE, i);
             break;
         }
-        size = fwrite(buf, 1, 0x100, fp);
-        if (size != 0x100) {
+
+        used = fwrite(buf, 1, size, fp);
+        if (size != used) {
             printf("error: can not write data block %d.\n", i);
             break;
         }
-        if (i % 4 == 0) {
+        if (i % (2048 / BLK_SIZE) == 0) {
             fwrite("#", 1, 1, stdout);
             fflush(stdout);
         }
@@ -360,26 +362,25 @@ void gd32_write_file_to_flash(const char *name, const char *path)
         printf("can not read file %s, erased only.\n", path);
         goto write_end;
     }
-    printf("[I] <= BIN: ");
+    printf("[GD32] <= %s: ", path);
     for (i = 0; ; i++) {
-        char buf[0x100];
-        int size;
+        char buf[BLK_SIZE];
+        int size, used;
 
-        memset(buf, 0xff, 0x100);
-        size = fread(buf, 1, 0x100, fp);
+        size = fread(buf, 1, BLK_SIZE, fp);
         if (size <= 0) {
             // we have reached the end of the file ...
             // or might a rare error, ignore it. :)
             break;
         }
 
-        size = gd32_write_memory(port, 0x08000000 + i * 0x100, buf, 0x100);
-        if (size != 0x100) {
-            printf("error: can not write memory block %d.\n", i);
+        used = gd32_write_memory(port, 0x08000000 + i * BLK_SIZE, buf, size);
+        if (used != size) {
+            printf("error: write size %d!=%d at block %d.\n", size, used, i);
             break;
         }
-
-        if (i % 4 == 0) {
+        
+        if (i % (2048 / BLK_SIZE) == 0) {
             fwrite("#", 1, 1, stdout);
             fflush(stdout);
         }
@@ -478,15 +479,6 @@ int convert_bin_to_hex(const char *bin, const char *hex)
     return total;
 }
 
-int check_tag(const char *tag)
-{
-    FILE *fp = fopen(tag, "rb");
-    if (fp == NULL)
-        return 0;
-    fclose(fp);
-    return 1;
-}
-
 int main(int argc, char *argv[])
 {
     if (argc == 1) {
@@ -496,15 +488,6 @@ int main(int argc, char *argv[])
         printf("usage: gd32up bin2hex [in bin] [out: hex]\n\tconvert bin to hex file.\n\n");
         return -1;
     }
-
-    debug = check_tag("debug");
-    if (debug)
-        printf("TAG: debug mode is enabled.\n");
-
-    // slow mode: we find some time gd32 can not accept two bytes, but if we slow down, it will work.
-    slow = check_tag("slow");
-    if (slow)
-        printf("TAG: slow write mode is enabled.\n");
 
     if (!strcmp(argv[1], "list")) {
         print_serial_list();
