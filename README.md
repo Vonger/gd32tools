@@ -43,4 +43,13 @@ the libserialport.a will be in its ./.libs/ folder.
 - bin2hex [in bin] [out: hex]: convert bin to hex file.
 - write [port]: erase flash only.
 
+### Use GCC compile gd32f150 app
+
+- download GD32F1x0_Firmware_Library_v3.1.0 to GD32GCC folder and uncompress.
+- put toolchain to GD32GCC/toolchain folder, for example, if you are macos, put the toolchain to GD32GCC/toolchain/mac, if windows, put it to GD32GCC/toolchain/win. (Linux guy normally are super, guild is not necessary :)
+- move the project folder in this gd32tools to GD32GCC folder.
+- call make in GD32GCC/project/led. note: Makefile default path is for mac, if you want to run in Windows or Linux, must change the $(TOOLCHAIN) path.
+- if everything works normal, you will get led.hex
+- you can call `gd32up write /dev/ttyS0 led.hex`, write it to the chip. 
+
 
